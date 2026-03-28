@@ -1,0 +1,208 @@
+---
+title: "exercise-08"
+author: "Sai Tokmurzina"
+format: html
+editor: visual
+---
+
+# STEP 1
+
+Here I pull the Street et al 2017 csv file as a raw github link. I use {tidyverse} read_csv function to read the csv as my data frame d.
+
+```{r}
+library(tidyverse)
+f <- "https://raw.githubusercontent.com/difiore/ada-datasets/refs/heads/main/Street_et_al_2017.csv"
+d <- read_csv(f, col_names = TRUE)
+```
+
+## Exploratory data analysis
+
+Next, I generate the mean, standard deviation and 5-number summary (median, minimum, maximum and 1st and 3rd quartile values) for every numeric variable. I used {skimr} for this quick exploratory data analysis (I call skim() for my data frame d).
+
+```{r}
+library(skimr)
+eda <- skim(d)
+eda
+```
+
+# STEP 2
+
+In this step, I plot brain size (**ECV**) against (1) social group size (**Group_size**), (2) **Longevity**, (3) juvenile period length (**Weaning**) and (4) reproductive lifespan (**Repro_lifespan**) in {ggplot2}. For that, first I select my noted variables and call it under d_temp.
+
+Then, I use {tidyr} pivot_longer() function, which reshapes data by gathering those four predictor columns (excludes ECV) into two new columns: (1) predictor (stores predictor names) and (2) value (stores corresponding values). I also use drop_na() to get rid of missing NAs, as it messes up x-axis scales when I plot the graph (missing rows are removed from drawing the points, but they still affect the plot scales).
+
+This makes it easier to plot several predictors in the same plot. I use {ggplot2} to plot ECV against my four predictor values with geom_point(). I facet_wrap(\~ predictor) to split the graph into separate panels for each predictor variable. Using scales = "free_x" allows each panel to have its own x-axis scale (because the predictors ranges differ a lot).
+
+```{r}
+d_temp <- d |>
+  select(ECV, Group_size, Longevity, Weaning, Repro_lifespan) |>
+  pivot_longer(
+    cols = c(Group_size, Longevity, Weaning, Repro_lifespan),
+    names_to = "predictor",
+    values_to = "value"
+  ) |>
+  drop_na(ECV, value)
+
+p <- ggplot(d_temp, aes(x = value, y = ECV)) +
+  geom_point() +
+  facet_wrap(~ predictor, scales = "free_x") 
+p
+
+```
+
+# STEP 3
+
+Next, I create a new dataset d2, where I only select() ECV and Group_size, while removing NAs —\> drop_na(). For the regression of ECV \~ Group_size, I calculate b1 (slope coeff) by dividing covariance (cov()) between Group_size and ECV by the variance (var()) of Group_size. Then, I calculate b0 (intercept), using b0= mean(y) - b1\*mean(x), where y=ECV, x=Group_size.
+
+```{r}
+d2 <- d |> 
+  select(ECV, Group_size) |> 
+  drop_na()
+
+b1 <- cov(d2$Group_size, d2$ECV) / var(d2$Group_size)
+b1
+
+b0 <- mean(d2$ECV) - b1 * mean(d2$Group_size)
+b0
+```
+
+# STEP 4
+
+Here, I fit a linear model for my d2 data by ECV \~ Group_size. I use the {stats} lm() function and call it m1.
+
+```{r}
+m1 <- lm(ECV ~ Group_size, data = d2)
+m1
+```
+
+I confirmed that step 3 and 4 results are identical to each other.
+
+# STEP 5
+
+I use {dplyr} operators to select ECV, Group_size and Taxonomic_group, while dropping NAs (drop_na()) and filtering Taxonomic_group by "Catarrhini", "Platyrrhini", "Strepsirhini". Next, I fit a linear model for each primate group by ECV \~ Group_size and obtain the statistics via {broom} tidy().
+
+```{r}
+
+library(broom)
+
+d3 <- d |>
+  select(ECV, Group_size, Taxonomic_group) |>
+  drop_na() |>
+  filter(Taxonomic_group %in% c("Catarrhini", "Platyrrhini", "Strepsirhini"))
+
+m2 <- lm(ECV ~ Group_size, data = filter(d3, Taxonomic_group == "Catarrhini"))
+m3 <- lm(ECV ~ Group_size, data = filter(d3, Taxonomic_group == "Platyrrhini"))
+m4 <- lm(ECV ~ Group_size, data = filter(d3, Taxonomic_group == "Strepsirhini"))
+
+tidy(m2)
+tidy(m3)
+tidy(m4)
+```
+
+The regression coefficients differ among the three groups. Catarrhines have a much higher intercept (83.42) and a smaller slope (1.15), while platyrrhines and strepsirrhines have lower intercepts (16.18 and 8.18) and somewhat steeper slopes (1.97 and 1.84).
+
+### To determine whether these differences are statistically significant, I fit a single linear model including an interaction between Group_size and Taxonomic_group and plot them:
+
+```{r}
+m5 <- lm(ECV ~ Group_size * Taxonomic_group, data = d3)
+summary(m5)
+p2 <- ggplot(d3, aes(x = Group_size, y = ECV, color = Taxonomic_group)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+p2
+```
+
+Here, catarrhines are the reference group, so their coefficients are shown by the intercept and Group_size. The coefficients for platyrrhines and strepsirrhines are shown as differences relative to catarrhines. The results suggest that intercepts differ among groups, but the interaction terms are not significant, so there is no strong evidence that the slopes differ among groups that much. The plot supports the same, although looks kind of messy.
+
+# STEP 6
+
+This code calculates the slope SE, t statistic, p-value and 95% CI for the regression of ECV on Group_size by hand and compares them to the values returned by lm().
+
+I assign x = Group_size, y = ECV and store the \# of observations as n. Then, I calculate the SE of the slope, using the residual variation around the regression line and the variation in x. Next, I calculate the t stat by dividing the slope (b1) by its SE and use that to find the p-value. I also calculate the 95% CI for the slope as b1 +- t\* SE. Finally, I compare my hand-calculated SE, CI and p-value to the results from tidy(m1) and confint(m1) to confirm they matched the lm() output.
+
+```{r}
+x <- d2$Group_size
+y <- d2$ECV
+n <- nrow(d2)
+
+se <- sqrt((sum((y - (b0 + b1*x))^2) / (n - 2)) / sum((x - mean(x))^2))
+
+t <- b1 / se
+p_value <- 2 * pt(-abs(t), df = n - 2)
+ci <- b1 + c(-1, 1) * qt(0.975, df = n - 2) * se ## b1 +- t* SE
+
+se
+ci
+p_value
+tidy(m1)
+confint(m1)
+```
+
+For the regression of ECV on Group_size (m1), the slope standard is 0.3508. Using this, I calculated a 95% CI of (1.7699, 3.1563) and a p-value of 7.26 × 10\^-11 for the slope. These values match the results obtained from tidy(m1) and confint(m1).
+
+# STEP 7
+
+I set the \# of permutations to 1000 and create an empty vector (perm_coeffs) to store the slope coefficient from each permutation. Then, I extract the observed slope coefficient from my first model (m1), which is the slope for Group_size. This is what I need to run the permutation.
+
+Inside the for loop, I create d_perm from existing d2 dataset. Group_size values are randomly shuffled using sample(). For each permutation, I fit a linear model lm(). I extract the slope coefficient for Group_size (tidy(), filter(), pull(estimate)), which I store in perm_coeffs.
+
+After the loop, I plot perm_coeffs as a histogram. Finally, the p-value is calculated as the mean of permuted slope coeffs, whose absolute value is \>= the absolute value of the observed slope, giving a two-tailed permutation p-value.
+
+```{r}
+nperm <- 1000
+perm_coeffs <- vector(length = nperm) ## new vector to hold the results
+
+observed_coeff <- tidy(m1) |>
+  filter(term == "Group_size") |>
+  pull(estimate)
+
+for (i in 1:nperm) {
+  d_perm <- d2
+  d_perm$Group_size <- sample(d2$Group_size)
+  
+  perm_coeffs[[i]] <- lm(ECV ~ Group_size, data = d_perm) |>
+    tidy() |>
+    filter(term == "Group_size") |>
+    pull(estimate)
+}
+
+hist(perm_coeffs)
+
+p_value_perm <- mean(abs(perm_coeffs) >= abs(observed_coeff))
+p_value_perm
+```
+
+my p-value is 0 (very close to it). This indicates that the positive relationship between Group_size and ECV provides a strong evidence against the null hypothesis.
+
+# STEP 8
+
+I estimate the slope coefficient (ECV on Group_size) using bootstrapping with 1000 resamples. In each bootstrap, I resample d2 with replacement, fit the linear model ECV \~ Group_size and store the estimated slope. Then, I calculate a 95% CI using the (1) quantile method from the 2.5th and 97.5th percentiles of the distribution and also (2) a theory-based method, where the standard deviation of the bootstrap slopes was used as the standard error.
+
+```{r}
+nboot <- 1000
+boot_coeffs <- vector(length = nboot)
+
+for (i in 1:nboot) {
+  d_boot <- d2[sample(nrow(d2), replace = TRUE), ]
+  
+  boot_coeffs[[i]] <- lm(ECV ~ Group_size, data = d_boot) |>
+    tidy() |>
+    filter(term == "Group_size") |>
+    pull(estimate)
+}
+
+hist(boot_coeffs)
+
+## quantile CI
+ci_quantile <- quantile(boot_coeffs, c(0.025, 0.975))
+
+## theory-based CI
+boot_se <- sd(boot_coeffs)
+ci_theory <- b1 + c(-1, 1) * 1.96 * boot_se
+
+ci_quantile
+boot_se
+ci_theory
+```
+
+Both bootstrap confidence intervals excluded 0, suggesting that the slope coefficient is different from zero.
